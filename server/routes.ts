@@ -51,6 +51,8 @@ export async function registerRoutes(
         fileSize: req.file.size,
       });
 
+      console.log(`[LOG] Conversion started: ZipName=${req.file.originalname}, Target=${targetFormat}`);
+
       processConversion(conversion.id, newPath, targetFormat);
       res.status(201).json(conversion);
     } catch (err) {
@@ -61,7 +63,21 @@ export async function registerRoutes(
   app.get(api.conversions.download.path, async (req, res) => {
     const item = await storage.getConversion(Number(req.params.id));
     if (!item?.downloadUrl) return res.status(404).json({ message: "Not ready" });
-    res.download(path.resolve(item.downloadUrl));
+    
+    const filePath = path.resolve(item.downloadUrl);
+    if (!fs.existsSync(filePath)) return res.status(404).json({ message: "File missing" });
+
+    res.download(filePath, item.originalName.replace(/\.[^/.]+$/, "") + ".zip", (err) => {
+      if (!err) {
+        // Delete the file after download
+        try {
+          fs.unlinkSync(filePath);
+          console.log(`[LOG] File deleted after download: ${filePath}`);
+        } catch (unlinkErr) {
+          console.error("Error deleting file:", unlinkErr);
+        }
+      }
+    });
   });
 
   return httpServer;
@@ -105,14 +121,9 @@ async function processConversion(id: number, inputPath: string, targetFormat: st
     const modelOutputFilename = `model_${id}.${targetFormat}`;
     const modelOutputPath = path.join(workDir, modelOutputFilename);
 
-    // Run assimp export inside the work directory
     await execAsync(`assimp export "${daeFileRelative}" "${modelOutputFilename}"`, { cwd: workDir });
 
-    // Create a final ZIP containing the model and all extracted files (textures)
     const finalZip = new AdmZip();
-    
-    // Add the whole workDir to the final zip
-    // This includes the converted model and all extracted textures/folders
     finalZip.addLocalFolder(workDir);
     
     const finalZipFilename = `converted_${id}.zip`;
@@ -120,6 +131,10 @@ async function processConversion(id: number, inputPath: string, targetFormat: st
     finalZip.writeZip(finalZipPath);
 
     await storage.updateConversionStatus(id, "completed", undefined, path.join("converted", finalZipFilename));
+    
+    // Cleanup input file
+    if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
+
   } catch (error: any) {
     console.error("Conversion failed:", error);
     await storage.updateConversionStatus(id, "failed", error.message);
