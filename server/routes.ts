@@ -102,14 +102,24 @@ async function processConversion(id: number, inputPath: string, targetFormat: st
 
     if (!daeFileRelative) throw new Error("No .dae file found");
 
-    const outputFilename = `converted_${id}.${targetFormat}`;
-    const outputPath = path.join(rootWorkDir, "converted", outputFilename);
+    const modelOutputFilename = `model_${id}.${targetFormat}`;
+    const modelOutputPath = path.join(workDir, modelOutputFilename);
 
-    // Run command from within the workDir so paths are handled correctly
-    // We use absolute path for the output file
-    await execAsync(`assimp export "${daeFileRelative}" "${outputPath}"`, { cwd: workDir });
+    // Run assimp export inside the work directory
+    await execAsync(`assimp export "${daeFileRelative}" "${modelOutputFilename}"`, { cwd: workDir });
 
-    await storage.updateConversionStatus(id, "completed", undefined, path.join("converted", outputFilename));
+    // Create a final ZIP containing the model and all extracted files (textures)
+    const finalZip = new AdmZip();
+    
+    // Add the whole workDir to the final zip
+    // This includes the converted model and all extracted textures/folders
+    finalZip.addLocalFolder(workDir);
+    
+    const finalZipFilename = `converted_${id}.zip`;
+    const finalZipPath = path.join(rootWorkDir, "converted", finalZipFilename);
+    finalZip.writeZip(finalZipPath);
+
+    await storage.updateConversionStatus(id, "completed", undefined, path.join("converted", finalZipFilename));
   } catch (error: any) {
     console.error("Conversion failed:", error);
     await storage.updateConversionStatus(id, "failed", error.message);
