@@ -68,12 +68,13 @@ export async function registerRoutes(
 }
 
 async function processConversion(id: number, inputPath: string, targetFormat: string) {
-  const workDir = path.join("temp", `job_${id}`);
+  const rootWorkDir = path.resolve(process.cwd());
+  const workDir = path.join(rootWorkDir, "temp", `job_${id}`);
   try {
     await storage.updateConversionStatus(id, "processing");
     if (!fs.existsSync(workDir)) fs.mkdirSync(workDir, { recursive: true });
 
-    let daeFile = "";
+    let daeFileRelative = "";
 
     if (path.extname(inputPath).toLowerCase() === ".zip") {
       const zip = new AdmZip(inputPath);
@@ -87,28 +88,30 @@ async function processConversion(id: number, inputPath: string, targetFormat: st
             const found = findDae(fullPath);
             if (found) return found;
           } else if (file.toLowerCase().endsWith(".dae")) {
-            return fullPath;
+            return path.relative(workDir, fullPath);
           }
         }
         return "";
       };
-      daeFile = findDae(workDir);
+      daeFileRelative = findDae(workDir);
     } else {
       const dest = path.join(workDir, path.basename(inputPath));
       fs.copyFileSync(inputPath, dest);
-      daeFile = dest;
+      daeFileRelative = path.basename(inputPath);
     }
 
-    if (!daeFile) throw new Error("No .dae file found");
+    if (!daeFileRelative) throw new Error("No .dae file found");
 
     const outputFilename = `converted_${id}.${targetFormat}`;
-    const outputPath = path.join("converted", outputFilename);
+    const outputPath = path.join(rootWorkDir, "converted", outputFilename);
 
-    // Assimp will look for textures relative to the DAE file in the workDir
-    await execAsync(`assimp export "${daeFile}" "${outputPath}"`, { cwd: workDir });
+    // Run command from within the workDir so paths are handled correctly
+    // We use absolute path for the output file
+    await execAsync(`assimp export "${daeFileRelative}" "${outputPath}"`, { cwd: workDir });
 
-    await storage.updateConversionStatus(id, "completed", undefined, outputPath);
+    await storage.updateConversionStatus(id, "completed", undefined, path.join("converted", outputFilename));
   } catch (error: any) {
+    console.error("Conversion failed:", error);
     await storage.updateConversionStatus(id, "failed", error.message);
   } finally {
     if (fs.existsSync(workDir)) fs.rmSync(workDir, { recursive: true, force: true });
